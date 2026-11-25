@@ -31,15 +31,26 @@ jobs:
           key: llvm-18.1.8-v2
           max-size: 5G
 
-      - name: Build LLVM/Clang 18.1.8 (first run only)
-        id: build-llvm
+      - name: Fetch LLVM 18.1.8 sources
         if: steps.llvm-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 320
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: llvmorg-18.1.8
+          path: llvm-src
+          fetch-depth: 1
+          sparse-checkout: |
+            llvm
+            clang
+            cmake
+            third-party
+
+      - name: Configure LLVM/Clang
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 30
         shell: cmd
         run: |
-          curl -L -o llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/llvm-project-18.1.8.src.tar.xz
-          tar -xf llvm.tar.xz
-          cmake -S llvm-project-18.1.8.src\llvm -B llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+          cmake -S llvm-src\llvm -B llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
             -DLLVM_ENABLE_PROJECTS=clang -DLLVM_TARGETS_TO_BUILD=X86 ^
             -DLLVM_ENABLE_ASSERTIONS=OFF -DLLVM_ENABLE_RTTI=OFF -DLLVM_OPTIMIZED_TABLEGEN=ON ^
@@ -49,7 +60,13 @@ jobs:
             -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF ^
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL -DCMAKE_INSTALL_PREFIX=C:\llvm18 ^
             "-DLLVM_DISTRIBUTION_COMPONENTS=llvm-libraries;llvm-headers;cmake-exports;clang-libraries;clang-headers;clang-cmake-exports;clang-resource-headers"
-          cmake --build llvm-build --target install-distribution
+
+      - name: Build LLVM/Clang
+        id: build-llvm
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 300
+        shell: cmd
+        run: cmake --build llvm-build --target install-distribution
 
       - name: Save LLVM install
         if: steps.build-llvm.outcome == 'success'
