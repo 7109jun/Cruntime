@@ -1,7 +1,6 @@
 name: build-windows
 
-# Builds LLVM/Clang 18 (cached) and CRuntime.exe on a Windows runner and uploads the result.
-# Usage: push this folder to a GitHub repo -> Actions -> build-windows -> Run workflow -> download artifact.
+# Builds LLVM/Clang 18 (only what CRuntime needs, cached) and CRuntime.exe, then uploads the result.
 on:
   workflow_dispatch:
   push:
@@ -9,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: windows-2022
-    timeout-minutes: 300
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -17,26 +16,47 @@ jobs:
         with:
           arch: x64
 
-      - name: Cache LLVM/Clang
+      - name: Restore LLVM install
         id: llvm-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: C:\llvm18
-          key: llvm-18.1.8-clang-x64-md-v1
+          key: llvm-18.1.8-dist-x64-md-v2
 
-      - name: Build LLVM/Clang 18.1.8 (first run only, ~1-2h)
+      # ccache keeps compiled objects across runs, so an interrupted LLVM build resumes instead of restarting.
+      - name: ccache
         if: steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: llvm-18.1.8-v2
+          max-size: 5G
+
+      - name: Build LLVM/Clang 18.1.8 (first run only)
+        id: build-llvm
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 320
         shell: cmd
         run: |
           curl -L -o llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/llvm-project-18.1.8.src.tar.xz
           tar -xf llvm.tar.xz
           cmake -S llvm-project-18.1.8.src\llvm -B llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
             -DLLVM_ENABLE_PROJECTS=clang -DLLVM_TARGETS_TO_BUILD=X86 ^
-            -DLLVM_ENABLE_ASSERTIONS=OFF -DLLVM_ENABLE_RTTI=OFF ^
-            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF ^
-            -DCLANG_INCLUDE_TESTS=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF ^
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL -DCMAKE_INSTALL_PREFIX=C:\llvm18
-          cmake --build llvm-build --target install
+            -DLLVM_ENABLE_ASSERTIONS=OFF -DLLVM_ENABLE_RTTI=OFF -DLLVM_OPTIMIZED_TABLEGEN=ON ^
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_DOCS=OFF ^
+            -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF ^
+            -DCLANG_ENABLE_ARCMT=OFF -DCLANG_ENABLE_STATIC_ANALYZER=OFF -DCLANG_ENABLE_OBJC_REWRITER=OFF ^
+            -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF ^
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL -DCMAKE_INSTALL_PREFIX=C:\llvm18 ^
+            "-DLLVM_DISTRIBUTION_COMPONENTS=llvm-libraries;llvm-headers;cmake-exports;clang-libraries;clang-headers;clang-cmake-exports;clang-resource-headers"
+          cmake --build llvm-build --target install-distribution
+
+      - name: Save LLVM install
+        if: steps.build-llvm.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\llvm18
+          key: llvm-18.1.8-dist-x64-md-v2
 
       - name: Build CRuntime
         shell: cmd
@@ -57,15 +77,17 @@ jobs:
           type smoke3.txt
 
       - name: Package
+        if: always()
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item build\CRuntime.exe dist\
-          Copy-Item build\clang_resource dist\clang_resource -Recurse
+          if (Test-Path build\CRuntime.exe) { Copy-Item build\CRuntime.exe dist\ }
+          if (Test-Path build\clang_resource) { Copy-Item build\clang_resource dist\clang_resource -Recurse }
           Copy-Item examples dist\examples -Recurse
           Copy-Item smoke*.txt dist\ -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: CRuntime-win64
           path: dist
