@@ -11,6 +11,7 @@
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/Error.h>
@@ -120,6 +121,34 @@ void optimizeModule(Module& M, int level) {
     MPM.run(M, MAM);
 }
 
+
+// EH personality routines live in vcruntime140.dll, usually >4GB from JIT memory, but the unwind info stores the
+// handler as a 32-bit RVA (ADDR32NB) from the image base. Give each module an internal forwarding stub so the RVA
+// points inside the JIT image; the stub jumps to the real routine.
+void localizePersonalities(Module& M) {
+    for (const char* name : {"__CxxFrameHandler3", "__C_specific_handler", "__GSHandlerCheck", "__GSHandlerCheck_SEH"}) {
+        Function* decl = M.getFunction(name);
+        if (!decl || !decl->isDeclaration()) continue;
+        void* real = findSymbol(name);
+        if (!real) continue;
+        LLVMContext& C = M.getContext();
+        Type* p = PointerType::getUnqual(C);
+        auto* fty = FunctionType::get(Type::getInt32Ty(C), {p, p, p, p}, false);
+        Function* stub = Function::Create(fty, GlobalValue::InternalLinkage, std::string(name) + ".local", &M);
+        BasicBlock* bb = BasicBlock::Create(C, "entry", stub);
+        IRBuilder<> b(bb);
+        Value* target = ConstantExpr::getIntToPtr(b.getInt64((uint64_t)(uintptr_t)real), p);
+        std::vector<Value*> args;
+        for (auto& a : stub->args()) args.push_back(&a);
+        CallInst* call = b.CreateCall(fty, target, args);
+        call->setTailCallKind(CallInst::TCK_MustTail);
+        b.CreateRet(call);
+        decl->replaceAllUsesWith(stub);
+        decl->eraseFromParent();
+        stub->setName(name);  // internal, so no clash with other modules
+    }
+}
+
 int g_fltused = 1;
 
 }  // namespace
@@ -178,6 +207,7 @@ JitEngine::~JitEngine() {
 }
 
 bool JitEngine::addModule(CompiledUnit&& unit, std::string& err) {
+    localizePersonalities(*unit.mod);
     if (optLevel_ > 0) optimizeModule(*unit.mod, optLevel_);
     ThreadSafeModule tsm(std::move(unit.mod), std::move(unit.ctx));
     if (auto e = jit_->addIRModule(std::move(tsm))) { err = errStr(std::move(e)); return false; }
