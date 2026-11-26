@@ -55,8 +55,14 @@ add_executable(CRuntime WIN32
     src/core/Compiler.cpp
     src/core/JitEngine.cpp
     src/core/Worker.cpp
+    src/core/HostSymbols.cpp
     src/gui/MainWindow.cpp
     res/CRuntime.manifest)
+
+# HostSymbols reads the type_info vtable via typeid -> needs RTTI (everything else is /GR- to match LLVM).
+if(MSVC)
+    set_source_files_properties(src/core/HostSymbols.cpp PROPERTIES COMPILE_OPTIONS "/GR")
+endif()
 
 target_include_directories(CRuntime PRIVATE
     src src/core src/gui ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})

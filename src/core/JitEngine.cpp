@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include "HostSymbols.h"
 #include "SehMemoryManager.h"
 
 #include <llvm/ExecutionEngine/Orc/Core.h>
@@ -124,6 +125,8 @@ std::unique_ptr<JitEngine> JitEngine::create(int optLevel, std::string& err) {
     // Compiler-support symbols MSVC-ABI object code expects.
     SymbolMap abs;
     abs[es.intern("_fltused")] = {ExecutorAddr::fromPtr(&g_fltused), JITSymbolFlags::Exported};
+    for (const auto& hs : hostSymbols())
+        abs[es.intern(hs.name)] = {ExecutorAddr::fromPtr(hs.addr), JITSymbolFlags::Exported};
     if (auto er = jd.define(absoluteSymbols(std::move(abs)))) { err = errStr(std::move(er)); return nullptr; }
     return e;
 }
