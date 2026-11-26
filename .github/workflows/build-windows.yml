@@ -87,12 +87,14 @@ jobs:
 
       - name: Diagnostics
         shell: pwsh
+        timeout-minutes: 8
         continue-on-error: true
         run: |
-          function Probe($name, $args) {
-            $p = Start-Process -FilePath build\CRuntime.exe -ArgumentList $args -Wait -PassThru -NoNewWindow `
+          function Probe([string]$name, [string[]]$argv) {
+            $p = Start-Process -FilePath build\CRuntime.exe -ArgumentList $argv -PassThru -NoNewWindow `
                  -RedirectStandardOutput "$name.out.txt" -RedirectStandardError "$name.err.txt"
-            "===== $name : $($args -join ' ')  exit=0x{0:X8}" -f $p.ExitCode | ForEach-Object { $_ -replace '\{0:X8\}', ('{0:X8}' -f $p.ExitCode) }
+            if (-not $p.WaitForExit(60000)) { $p.Kill(); "===== $name : $($argv -join ' ')  TIMEOUT (killed after 60s)" }
+            else { "===== $name : $($argv -join ' ')  exit=0x{0:X8}" -f $p.ExitCode }
             "--- stdout"; Get-Content "$name.out.txt" -ErrorAction SilentlyContinue
             "--- stderr"; Get-Content "$name.err.txt" -ErrorAction SilentlyContinue
           }
@@ -102,11 +104,12 @@ jobs:
           "===== crash events"
           Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'} -MaxEvents 3 -ErrorAction SilentlyContinue |
             ForEach-Object { $_.Message }
-          "===== dumpbin imports"
+          "===== dependents"
           dumpbin /dependents build\CRuntime.exe
 
       - name: Smoke tests
         shell: pwsh
+        timeout-minutes: 8
         continue-on-error: true
         run: |
           # CRuntime.exe is a GUI-subsystem exe: Start-Process -Wait is required to wait for it.
