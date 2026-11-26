@@ -113,7 +113,7 @@ jobs:
         timeout-minutes: 5
         run: |
           set CDB="C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
-          %CDB% -g -G -y build -c "sxd av;sxd ibp;g;.lastevent;.exr -1;k 40;q" build\CRuntime.exe run tests\jit\t9_throw.cpp 2>&1 | findstr /v /c:"[sym]" | more
+          %CDB% -G -y build -c "sxd av;sxd ibp;sxe e06d7363;g;k 12;.frame 1;.fnent @$ip;.frame 2;.fnent @$ip;.frame 3;.fnent @$ip;q" build\CRuntime.exe run tests\jit\t9_throw.cpp 2>&1 | findstr /v /c:"[sym]" | more
 
       - name: Package
         if: always()
