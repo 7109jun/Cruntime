@@ -11,6 +11,8 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <vector>
 
@@ -34,8 +36,21 @@ public:
         bool failed = SectionMemoryManager::finalizeMemory(err);
         if (!failed && pdata_ && pdataSize_ >= sizeof(RUNTIME_FUNCTION) && lo_ && hi_ - lo_ < (1ull << 31)) {
             DWORD count = (DWORD)(pdataSize_ / sizeof(RUNTIME_FUNCTION));
-            if (RtlAddFunctionTable((PRUNTIME_FUNCTION)pdata_, count, (DWORD64)lo_))
-                tables_.push_back((PRUNTIME_FUNCTION)pdata_);
+            BOOL ok = RtlAddFunctionTable((PRUNTIME_FUNCTION)pdata_, count, (DWORD64)lo_);
+            if (ok) tables_.push_back((PRUNTIME_FUNCTION)pdata_);
+            if (trace()) {
+                auto* rf = (PRUNTIME_FUNCTION)pdata_;
+                DWORD64 base = 0;
+                PRUNTIME_FUNCTION found = RtlLookupFunctionEntry(lo_ + rf[0].BeginAddress, &base, nullptr);
+                std::fprintf(stderr,
+                             "[seh] AddFunctionTable ok=%d count=%lu pdata=%p base=%p span=0x%llx first=[%08lx..%08lx unwind=%08lx] lookup=%s\n",
+                             (int)ok, (unsigned long)count, pdata_, (void*)lo_, (unsigned long long)(hi_ - lo_),
+                             rf[0].BeginAddress, rf[0].EndAddress, rf[0].UnwindData,
+                             found ? (base == lo_ ? "ok" : "BASE-MISMATCH") : "NOT-FOUND");
+            }
+        } else if (trace()) {
+            std::fprintf(stderr, "[seh] no .pdata registered (pdata=%p size=%llu lo=%p hi=%p)\n", pdata_,
+                         (unsigned long long)pdataSize_, (void*)lo_, (void*)hi_);
         }
         pdata_ = nullptr;
         pdataSize_ = 0;
@@ -48,6 +63,13 @@ public:
     }
 
 private:
+    static bool trace() {
+        char* v = nullptr;
+        size_t n = 0;
+        bool on = _dupenv_s(&v, &n, "CRUNTIME_TRACE") == 0 && v;
+        free(v);
+        return on;
+    }
     void track(uint8_t* p, uintptr_t size, llvm::StringRef name) {
         if (!p) return;
         uintptr_t a = (uintptr_t)p;

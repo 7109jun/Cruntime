@@ -96,6 +96,8 @@ void err(const std::string& s) { std::fprintf(stderr, "[CRuntime] %s\n", s.c_str
 int runPipeline(const RunOptions& o) {
     AddVectoredExceptionHandler(1, fatalHandler);
 
+    if (o.verbose) _putenv_s("CRUNTIME_TRACE", "1");
+
     // 1) Understand the input.
     ProjectSpec spec;
     std::string e;
