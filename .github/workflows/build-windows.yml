@@ -86,58 +86,22 @@ jobs:
             -DLLVM_DIR=C:\llvm18\lib\cmake\llvm -DClang_DIR=C:\llvm18\lib\cmake\clang
           cmake --build build -- -k 0
 
-      - name: Debugger stacks
-        shell: pwsh
-        timeout-minutes: 12
-        continue-on-error: true
-        run: |
-          $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
-          foreach ($t in @('examples\hello.cpp','examples\exceptions.cpp')) {
-            "################ cdb: $t"
-            $p = Start-Process -FilePath $cdb -PassThru -NoNewWindow `
-                 -ArgumentList @('-y','build','-c','"sxd av;sxd ibp;g;.lastevent;.exr -1;k 60;!heap -s;q"','build\CRuntime.exe','run',$t,'-v') `
-                 -RedirectStandardOutput cdb.out.txt -RedirectStandardError cdb.err.txt
-            if (-not $p.WaitForExit(240000)) { $p.Kill(); "cdb TIMEOUT" }
-            Get-Content cdb.out.txt | Where-Object { $_ -notmatch '^(ModLoad|NatVis|\s*$)' } | Select-Object -Last 120
-          }
-
-      - name: Diagnostics
-        shell: pwsh
-        timeout-minutes: 8
-        continue-on-error: true
-        run: |
-          function Probe([string]$name, [string[]]$argv) {
-            $p = Start-Process -FilePath build\CRuntime.exe -ArgumentList $argv -PassThru -NoNewWindow `
-                 -RedirectStandardOutput "$name.out.txt" -RedirectStandardError "$name.err.txt"
-            if (-not $p.WaitForExit(60000)) { $p.Kill(); "===== $name : $($argv -join ' ')  TIMEOUT (killed after 60s)" }
-            else { "===== $name : $($argv -join ' ')  exit=0x{0:X8}" -f $p.ExitCode }
-            "--- stdout"; Get-Content "$name.out.txt" -ErrorAction SilentlyContinue
-            "--- stderr"; Get-Content "$name.err.txt" -ErrorAction SilentlyContinue
-          }
-          Probe 'probe_help'  @('--help')
-          Probe 'probe_noarg' @('run')
-          Probe 'probe_hello' @('run','examples\hello.cpp','-v')
-          "===== crash events"
-          Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'} -MaxEvents 3 -ErrorAction SilentlyContinue |
-            ForEach-Object { $_.Message }
-          "===== dependents"
-          dumpbin /dependents build\CRuntime.exe
-
       - name: Smoke tests
         shell: pwsh
-        timeout-minutes: 8
+        timeout-minutes: 15
         continue-on-error: true
         run: |
-          # CRuntime.exe is a GUI-subsystem exe: Start-Process -Wait is required to wait for it.
+          # CRuntime.exe is a GUI-subsystem exe: Start-Process -PassThru + WaitForExit is required to wait for it.
+          $tests = @('examples\hello.cpp','examples\cproj','examples\exceptions.cpp') + (Get-ChildItem tests\jit\*.cpp | ForEach-Object { "tests\jit\$($_.Name)" })
           $i = 0
-          foreach ($t in @(@('examples\hello.cpp','-v'), @('examples\cproj'), @('examples\exceptions.cpp'))) {
+          foreach ($t in $tests) {
             $i++
-            $a = @('run') + $t
-            $p = Start-Process -FilePath build\CRuntime.exe -ArgumentList $a -Wait -PassThru -NoNewWindow `
+            $p = Start-Process -FilePath build\CRuntime.exe -ArgumentList @('run', $t, '-v') -PassThru -NoNewWindow `
                  -RedirectStandardOutput "smoke$i.out.txt" -RedirectStandardError "smoke$i.err.txt"
-            "===== smoke$i : $($t -join ' ')  exit=$($p.ExitCode)"
+            if (-not $p.WaitForExit(90000)) { $p.Kill() }
+            ("===== smoke$i : $t  exit=0x{0:X8}" -f $p.ExitCode)
             "--- stdout"; Get-Content "smoke$i.out.txt" -ErrorAction SilentlyContinue
-            "--- stderr"; Get-Content "smoke$i.err.txt" -ErrorAction SilentlyContinue
+            "--- stderr"; Get-Content "smoke$i.err.txt" -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\[CRuntime\] (project|MSVC|compiling)' } | Select-Object -First 12 | ForEach-Object { $_.Substring(0, [Math]::Min(300, $_.Length)) }
           }
 
       - name: Package
@@ -148,6 +112,7 @@ jobs:
           if (Test-Path build\CRuntime.exe) { Copy-Item build\CRuntime.exe dist\ }
           if (Test-Path build\clang_resource) { Copy-Item build\clang_resource dist\clang_resource -Recurse }
           Copy-Item examples dist\examples -Recurse
+          Copy-Item tests\jit dist\tests_jit -Recurse
           Copy-Item smoke*.txt dist\ -ErrorAction SilentlyContinue
           Compress-Archive -Path dist\* -DestinationPath CRuntime-win64.zip -Force
 
