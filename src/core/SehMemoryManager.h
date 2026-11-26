@@ -27,7 +27,12 @@ public:
     }
     uint8_t* allocateDataSection(uintptr_t size, unsigned align, unsigned id, llvm::StringRef name,
                                  bool readOnly) override {
-        uint8_t* p = SectionMemoryManager::allocateDataSection(size, align, id, name, readOnly);
+        // Unwind data (.xdata/.pdata) can contain RuntimeDyld-generated jump stubs to the external exception handler
+        // (__CxxFrameHandler3, __C_specific_handler, ...): the OS unwinder *executes* them, so this memory must be
+        // executable. Allocate these sections as code (RX after finalize); they stay readable for the unwinder.
+        const bool unwind = name.starts_with(".xdata") || name.starts_with(".pdata");
+        uint8_t* p = unwind ? SectionMemoryManager::allocateCodeSection(size, align, id, name)
+                            : SectionMemoryManager::allocateDataSection(size, align, id, name, readOnly);
         track(p, size, name);
         return p;
     }
