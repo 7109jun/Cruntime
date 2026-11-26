@@ -13,7 +13,6 @@
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Passes/PassBuilder.h>
-#include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/TargetSelect.h>
 
@@ -24,6 +23,58 @@ namespace cr {
 namespace {
 
 std::string errStr(Error e) { return toString(std::move(e)); }
+
+// ---- symbol resolution --------------------------------------------------------------------------------------
+// Never use "search every module in the process": the legacy system msvcrt.dll is loaded by the OS and also exports
+// malloc/free/operator new/..., with a different heap than the UCRT the user program is compiled against.
+// Instead look in a fixed, ordered list: user libraries first, then the UCRT/VC runtime, then Windows system DLLs.
+std::vector<HMODULE> g_modules;
+
+void initModules() {
+    g_modules.clear();
+    for (const char* dll : {"ucrtbase.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll",
+                            "msvcp140_2.dll", "concrt140.dll", "ntdll.dll", "kernelbase.dll", "kernel32.dll",
+                            "user32.dll", "gdi32.dll", "gdi32full.dll", "advapi32.dll", "shell32.dll", "ws2_32.dll",
+                            "ole32.dll", "oleaut32.dll", "comdlg32.dll", "comctl32.dll", "winmm.dll", "shlwapi.dll",
+                            "bcrypt.dll", "crypt32.dll", "imm32.dll", "version.dll", "psapi.dll", "dbghelp.dll"}) {
+        HMODULE m = GetModuleHandleA(dll);
+        if (!m) m = LoadLibraryA(dll);
+        if (m) g_modules.push_back(m);
+    }
+}
+
+bool isLegacyCrt(void* addr) {
+    HMODULE m = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)addr, &m))
+        return false;
+    char buf[MAX_PATH] = {};
+    GetModuleFileNameA(m, buf, MAX_PATH);
+    std::string f = lower(buf);
+    size_t sl = f.find_last_of("\\/");
+    return (sl == std::string::npos ? f : f.substr(sl + 1)) == "msvcrt.dll";
+}
+
+void* findSymbol(const std::string& name) {
+    for (HMODULE m : g_modules)
+        if (void* p = (void*)GetProcAddress(m, name.c_str())) return isLegacyCrt(p) ? nullptr : p;
+    return nullptr;
+}
+
+class ProcessSymbols : public DefinitionGenerator {
+public:
+    Error tryToGenerate(LookupState&, LookupKind, JITDylib& JD, JITDylibLookupFlags,
+                        const SymbolLookupSet& Names) override {
+        SymbolMap syms;
+        for (const auto& kv : Names) {
+            StringRef n = *kv.first;
+            if (n.starts_with("__imp_")) continue;  // ImportGenerator
+            if (void* a = findSymbol(n.str())) syms[kv.first] = {ExecutorAddr::fromPtr(a), JITSymbolFlags::Exported};
+        }
+        if (syms.empty()) return Error::success();
+        return JD.define(absoluteSymbols(std::move(syms)));
+    }
+};
 
 // Windows DLL imports: code compiled against dllimport declarations references
 // `__imp_<name>` (a pointer cell holding the function address). Synthesise those cells.
@@ -36,7 +87,7 @@ public:
             StringRef n = *kv.first;
             if (!n.starts_with("__imp_")) continue;
             std::string base = n.drop_front(6).str();
-            void* addr = sys::DynamicLibrary::SearchForAddressOfSymbol(base.c_str());
+            void* addr = findSymbol(base);
             if (!addr) continue;
             void** cell = new void*(addr);  // lives for the whole JIT session
             cells_.push_back(cell);
@@ -109,18 +160,9 @@ std::unique_ptr<JitEngine> JitEngine::create(int optLevel, std::string& err) {
     JITDylib& jd = e->jit_->getMainJITDylib();
     ExecutionSession& es = e->jit_->getExecutionSession();
 
+    initModules();
     jd.addGenerator(std::make_unique<ImportGenerator>());
-    auto self = DynamicLibrarySearchGenerator::GetForCurrentProcess(e->jit_->getDataLayout().getGlobalPrefix());
-    if (!self) { err = errStr(self.takeError()); return nullptr; }
-    jd.addGenerator(std::move(*self));
-
-    // Runtime DLLs that user code commonly needs (registered permanently so symbol search finds them).
-    for (const char* dll : {"ucrtbase.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll",
-                            "kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "shell32.dll", "ws2_32.dll",
-                            "ole32.dll", "comdlg32.dll", "winmm.dll"}) {
-        std::string ignore;
-        sys::DynamicLibrary::getPermanentLibrary(dll, &ignore);
-    }
+    jd.addGenerator(std::make_unique<ProcessSymbols>());
 
     // Compiler-support symbols MSVC-ABI object code expects.
     SymbolMap abs;
@@ -149,8 +191,10 @@ bool JitEngine::addLibrary(const std::string& lib, const std::vector<fs::path>& 
     bool isPath = p.has_parent_path();
 
     auto loadDll = [&](const fs::path& dll) -> bool {
-        std::string e;
-        return sys::DynamicLibrary::getPermanentLibrary(u8(dll).c_str(), &e).isValid();
+        HMODULE m = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (!m) return false;
+        g_modules.insert(g_modules.begin(), m);  // user libraries take precedence
+        return true;
     };
     auto find = [&](const std::string& fname) -> fs::path {
         for (const auto& d : dirs) {

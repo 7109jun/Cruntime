@@ -12,6 +12,14 @@
 namespace cr {
 namespace {
 
+void* hostNew(size_t n) { return ::operator new(n); }
+void* hostNewArray(size_t n) { return ::operator new[](n); }
+void hostDelete(void* p) { ::operator delete(p); }
+void hostDeleteArray(void* p) { ::operator delete[](p); }
+void* hostNewNothrow(size_t n, const std::nothrow_t& t) { return ::operator new(n, t); }
+void* hostNewArrayNothrow(size_t n, const std::nothrow_t& t) { return ::operator new[](n, t); }
+void hostDeleteNothrow(void* p, const std::nothrow_t&) { ::operator delete(p); }
+void hostDeleteArrayNothrow(void* p, const std::nothrow_t&) { ::operator delete[](p); }
 void sizedDelete(void* p, size_t) { ::operator delete(p); }
 void sizedDeleteArray(void* p, size_t) { ::operator delete[](p); }
 void* alignedNew(size_t n, std::align_val_t a) { return ::operator new(n, a); }
@@ -36,28 +44,24 @@ bool traceOn() {
     free(v);
     return on;
 }
-void* exported(const char* name) {
-    for (const char* dll : {"vcruntime140.dll", "ucrtbase.dll", "msvcp140.dll"}) {
-        HMODULE m = GetModuleHandleA(dll);
-        if (!m) m = LoadLibraryA(dll);
-        if (m)
-            if (void* p = (void*)GetProcAddress(m, name)) return p;
-    }
-    return nullptr;
-}
-std::string moduleOf(void* addr) {
-    HMODULE m = nullptr;
-    char buf[MAX_PATH] = "?";
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           (LPCSTR)addr, &m))
-        GetModuleFileNameA(m, buf, MAX_PATH);
-    return buf;
-}
 }  // namespace
 
 std::vector<HostSym> hostSymbols() {
+    // operator new/delete are NOT exported by ucrtbase/vcruntime140/msvcp140 (they live in the static part of the
+    // CRT). The legacy system msvcrt.dll does export them, but it has its own heap - binding to it makes
+    // new (msvcrt) / free (UCRT) mismatch. So the host provides every variant, all on the UCRT heap.
     std::vector<HostSym> v = {
         {"??_7type_info@@6B@", typeInfoVtable()},
+        {"??2@YAPEAX_K@Z", (void*)&hostNew},
+        {"??_U@YAPEAX_K@Z", (void*)&hostNewArray},
+        {"??3@YAXPEAX@Z", (void*)&hostDelete},
+        {"??_V@YAXPEAX@Z", (void*)&hostDeleteArray},
+        {"??3@YAXPEAX_K@Z", (void*)&sizedDelete},
+        {"??_V@YAXPEAX_K@Z", (void*)&sizedDeleteArray},
+        {"??2@YAPEAX_KAEBUnothrow_t@std@@@Z", (void*)&hostNewNothrow},
+        {"??_U@YAPEAX_KAEBUnothrow_t@std@@@Z", (void*)&hostNewArrayNothrow},
+        {"??3@YAXPEAXAEBUnothrow_t@std@@@Z", (void*)&hostDeleteNothrow},
+        {"??_V@YAXPEAXAEBUnothrow_t@std@@@Z", (void*)&hostDeleteArrayNothrow},
         {"??2@YAPEAX_KW4align_val_t@std@@@Z", (void*)&alignedNew},
         {"??_U@YAPEAX_KW4align_val_t@std@@@Z", (void*)&alignedNewArray},
         {"??3@YAXPEAXW4align_val_t@std@@@Z", (void*)&alignedDelete},
@@ -65,20 +69,8 @@ std::vector<HostSym> hostSymbols() {
         {"??3@YAXPEAX_KW4align_val_t@std@@@Z", (void*)&sizedAlignedDelete},
         {"??_V@YAXPEAX_KW4align_val_t@std@@@Z", (void*)&sizedAlignedDeleteArray},
     };
-    // Sized delete == unsized delete + an ignored 2nd argument (x64 ABI): alias to the DLL's exported operator delete
-    // so allocation and deallocation always go through exactly the same implementation as `operator new`.
-    if (void* d = exported("??3@YAXPEAX@Z")) v.push_back({"??3@YAXPEAX_K@Z", d});
-    else v.push_back({"??3@YAXPEAX_K@Z", (void*)&sizedDelete});
-    if (void* d = exported("??_V@YAXPEAX@Z")) v.push_back({"??_V@YAXPEAX_K@Z", d});
-    else v.push_back({"??_V@YAXPEAX_K@Z", (void*)&sizedDeleteArray});
-
-    if (traceOn()) {
-        for (const auto& h : v) std::fprintf(stderr, "[sym] %-40s -> %p  %s\n", h.name, h.addr, moduleOf(h.addr).c_str());
-        for (const char* n : {"??2@YAPEAX_K@Z", "??3@YAXPEAX@Z", "??_U@YAPEAX_K@Z", "??_V@YAXPEAX@Z"}) {
-            void* p = exported(n);
-            std::fprintf(stderr, "[sym] %-40s -> %p  %s\n", n, p, p ? moduleOf(p).c_str() : "(not exported)");
-        }
-    }
+    if (traceOn())
+        for (const auto& h : v) std::fprintf(stderr, "[sym] host %-40s -> %p\n", h.name, h.addr);
     return v;
 }
 
