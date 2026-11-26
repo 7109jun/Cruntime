@@ -1,5 +1,6 @@
 // NOTE: compiled with RTTI enabled (/GR) - see CMakeLists.txt - only to read the type_info vtable address.
 #include "HostSymbols.h"
+#include "ImageRegistry.h"
 
 #include <windows.h>
 
@@ -29,6 +30,21 @@ void alignedDeleteArray(void* p, std::align_val_t a) { ::operator delete[](p, a)
 void sizedAlignedDelete(void* p, size_t, std::align_val_t a) { ::operator delete(p, a); }
 void sizedAlignedDeleteArray(void* p, size_t, std::align_val_t a) { ::operator delete[](p, a); }
 
+// MSVC's _CxxThrowException derives the exception's ImageBase with RtlPcToFileHeader(ThrowInfo), which is NULL for
+// JIT memory (not a PE image) -> every RVA in ThrowInfo is wrong. For ThrowInfo inside a JIT image we raise the C++
+// exception ourselves with that image's base; everything else (host throws, `throw;` rethrow) goes to the real one.
+using ThrowFn = void(__stdcall*)(void*, void*);
+void __stdcall jitCxxThrow(void* obj, void* throwInfo) {
+    static ThrowFn real = (ThrowFn)GetProcAddress(GetModuleHandleA("vcruntime140.dll"), "_CxxThrowException");
+    uintptr_t base = throwInfo ? imageBaseFor(throwInfo) : 0;
+    if (!base) {
+        real(obj, throwInfo);
+        return;
+    }
+    ULONG_PTR params[4] = {0x01994000, (ULONG_PTR)obj, (ULONG_PTR)throwInfo, (ULONG_PTR)base};
+    RaiseException(0xE06D7363, EXCEPTION_NONCONTINUABLE, 4, params);
+}
+
 void* typeInfoVtable() {
     const std::type_info& ti = typeid(int);
     return *reinterpret_cast<void* const*>(&ti);  // vptr of a type_info object == address of its vftable
@@ -52,6 +68,7 @@ std::vector<HostSym> hostSymbols() {
     // new (msvcrt) / free (UCRT) mismatch. So the host provides every variant, all on the UCRT heap.
     std::vector<HostSym> v = {
         {"??_7type_info@@6B@", typeInfoVtable()},
+        {"_CxxThrowException", (void*)&jitCxxThrow},
         {"??2@YAPEAX_K@Z", (void*)&hostNew},
         {"??_U@YAPEAX_K@Z", (void*)&hostNewArray},
         {"??3@YAXPEAX@Z", (void*)&hostDelete},

@@ -8,6 +8,8 @@
 #include <windows.h>
 
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
+
+#include "ImageRegistry.h"
 #include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
@@ -39,6 +41,7 @@ public:
 
     bool finalizeMemory(std::string* err = nullptr) override {
         bool failed = SectionMemoryManager::finalizeMemory(err);
+        if (!failed && lo_ && hi_) registerImage(lo_, hi_);
         // Each COMDAT function brings its own ".pdata" section, so an object can have many of them. All entries
         // are relative to the same ImageBase (lowest section address); register every section as its own table.
         if (!failed && lo_ && hi_ - lo_ < (1ull << 31)) {
