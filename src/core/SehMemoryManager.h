@@ -34,26 +34,28 @@ public:
 
     bool finalizeMemory(std::string* err = nullptr) override {
         bool failed = SectionMemoryManager::finalizeMemory(err);
-        if (!failed && pdata_ && pdataSize_ >= sizeof(RUNTIME_FUNCTION) && lo_ && hi_ - lo_ < (1ull << 31)) {
-            DWORD count = (DWORD)(pdataSize_ / sizeof(RUNTIME_FUNCTION));
-            BOOL ok = RtlAddFunctionTable((PRUNTIME_FUNCTION)pdata_, count, (DWORD64)lo_);
-            if (ok) tables_.push_back((PRUNTIME_FUNCTION)pdata_);
-            if (trace()) {
-                auto* rf = (PRUNTIME_FUNCTION)pdata_;
-                DWORD64 base = 0;
-                PRUNTIME_FUNCTION found = RtlLookupFunctionEntry(lo_ + rf[0].BeginAddress, &base, nullptr);
-                std::fprintf(stderr,
-                             "[seh] AddFunctionTable ok=%d count=%lu pdata=%p base=%p span=0x%llx first=[%08lx..%08lx unwind=%08lx] lookup=%s\n",
-                             (int)ok, (unsigned long)count, pdata_, (void*)lo_, (unsigned long long)(hi_ - lo_),
-                             rf[0].BeginAddress, rf[0].EndAddress, rf[0].UnwindData,
-                             found ? (base == lo_ ? "ok" : "BASE-MISMATCH") : "NOT-FOUND");
+        // Each COMDAT function brings its own ".pdata" section, so an object can have many of them. All entries
+        // are relative to the same ImageBase (lowest section address); register every section as its own table.
+        if (!failed && lo_ && hi_ - lo_ < (1ull << 31)) {
+            for (auto& sec : pdata_) {
+                DWORD count = (DWORD)(sec.second / sizeof(RUNTIME_FUNCTION));
+                if (!count) continue;
+                BOOL ok = RtlAddFunctionTable((PRUNTIME_FUNCTION)sec.first, count, (DWORD64)lo_);
+                if (ok) tables_.push_back((PRUNTIME_FUNCTION)sec.first);
+                if (trace()) {
+                    auto* rf = (PRUNTIME_FUNCTION)sec.first;
+                    DWORD64 base = 0;
+                    PRUNTIME_FUNCTION found = RtlLookupFunctionEntry(lo_ + rf[0].BeginAddress, &base, nullptr);
+                    std::fprintf(stderr, "[seh] table ok=%d count=%lu base=%p first=[%08lx..%08lx] lookup=%s\n", (int)ok,
+                                 (unsigned long)count, (void*)lo_, rf[0].BeginAddress, rf[0].EndAddress,
+                                 found ? (base == lo_ ? "ok" : "BASE-MISMATCH") : "NOT-FOUND");
+                }
             }
-        } else if (trace()) {
-            std::fprintf(stderr, "[seh] no .pdata registered (pdata=%p size=%llu lo=%p hi=%p)\n", pdata_,
-                         (unsigned long long)pdataSize_, (void*)lo_, (void*)hi_);
+            if (trace() && !pdata_.empty())
+                std::fprintf(stderr, "[seh] object: %zu .pdata section(s), base=%p span=0x%llx\n", pdata_.size(),
+                             (void*)lo_, (unsigned long long)(hi_ - lo_));
         }
-        pdata_ = nullptr;
-        pdataSize_ = 0;
+        pdata_.clear();
         lo_ = hi_ = 0;
         return failed;
     }
@@ -75,11 +77,11 @@ private:
         uintptr_t a = (uintptr_t)p;
         lo_ = lo_ ? std::min(lo_, a) : a;
         hi_ = std::max(hi_, a + size);
-        if (name == ".pdata") { pdata_ = p; pdataSize_ = size; }
+        if (name == ".pdata") pdata_.push_back({p, size});
     }
 
-    uint8_t* pdata_ = nullptr;
-    uintptr_t pdataSize_ = 0, lo_ = 0, hi_ = 0;
+    std::vector<std::pair<uint8_t*, uintptr_t>> pdata_;
+    uintptr_t lo_ = 0, hi_ = 0;
     std::vector<PRUNTIME_FUNCTION> tables_;
 };
 

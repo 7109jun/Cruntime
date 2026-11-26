@@ -4,6 +4,9 @@
 
 #include <cstdio>
 
+#include <llvm/IR/Module.h>
+#include <llvm/Support/raw_ostream.h>
+
 #include "Compiler.h"
 #include "JitEngine.h"
 #include "Scanner.h"
@@ -25,7 +28,8 @@ const char* usageText() {
            "  -L<dir>  -l<lib>    extra library dir / library (.lib/.dll name or path)\n"
            "  --std <std>         language standard for the language of the sources (c17, c++23, ...)\n"
            "  --no-exceptions     compile C++ without exceptions\n"
-           "  -v                  verbose\n";
+           "  --dump-ir <dir>     write the generated LLVM IR (.ll) of each source to <dir> (debugging)\n"
+           "  -v                  verbose (also traces unwind-table registration)\n";
 }
 
 bool parseRunArgs(const std::vector<std::string>& args, RunOptions& o, std::string& err) {
@@ -48,6 +52,10 @@ bool parseRunArgs(const std::vector<std::string>& args, RunOptions& o, std::stri
         std::string v;
         if (a.size() == 3 && a[0] == '-' && a[1] == 'O' && a[2] >= '0' && a[2] <= '3') o.optLevel = a[2] - '0';
         else if (a == "--no-exceptions") o.exceptions = false;
+        else if (a == "--dump-ir") {
+            if (i + 1 >= args.size()) { err = "missing value for --dump-ir"; return false; }
+            o.dumpIrDir = pathFromU8(args[++i]);
+        }
         else if (a == "-v" || a == "--verbose") o.verbose = true;
         else if (a == "--target") {
             if (i + 1 >= args.size()) { err = "missing value for --target"; return false; }
@@ -133,6 +141,13 @@ int runPipeline(const RunOptions& o) {
         std::string diag;
         bool ok = compileSource(src, spec, tc, co, u, diag);
         if (!diag.empty()) { std::fputs(diag.c_str(), stderr); if (diag.back() != '\n') std::fputc('\n', stderr); }
+        if (ok && !o.dumpIrDir.empty()) {
+            std::error_code ec;
+            fs::create_directories(o.dumpIrDir, ec);
+            std::string path = u8(o.dumpIrDir / (u8(src.path.stem()) + ".ll"));
+            llvm::raw_fd_ostream os(path, ec);
+            if (!ec) u.mod->print(os, nullptr);
+        }
         if (ok) units.push_back(std::move(u));
         else failed = true;
     }

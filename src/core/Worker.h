@@ -12,6 +12,7 @@ struct RunOptions {
     int optLevel = 2;
     bool exceptions = true;
     bool verbose = false;
+    fs::path dumpIrDir;  // --dump-ir <dir>: write each unit's LLVM IR (.ll) there (debugging aid, opt-in)
     std::vector<fs::path> extraIncludes, extraLibDirs;
     std::vector<std::string> extraDefines, extraLibs;
     std::string cStd, cxxStd;
