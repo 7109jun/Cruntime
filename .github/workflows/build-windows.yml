@@ -85,6 +85,26 @@ jobs:
             -DLLVM_DIR=C:\llvm18\lib\cmake\llvm -DClang_DIR=C:\llvm18\lib\cmake\clang
           cmake --build build -- -k 0
 
+      - name: Diagnostics
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          function Probe($name, $args) {
+            $p = Start-Process -FilePath build\CRuntime.exe -ArgumentList $args -Wait -PassThru -NoNewWindow `
+                 -RedirectStandardOutput "$name.out.txt" -RedirectStandardError "$name.err.txt"
+            "===== $name : $($args -join ' ')  exit=0x{0:X8}" -f $p.ExitCode | ForEach-Object { $_ -replace '\{0:X8\}', ('{0:X8}' -f $p.ExitCode) }
+            "--- stdout"; Get-Content "$name.out.txt" -ErrorAction SilentlyContinue
+            "--- stderr"; Get-Content "$name.err.txt" -ErrorAction SilentlyContinue
+          }
+          Probe 'probe_help'  @('--help')
+          Probe 'probe_noarg' @('run')
+          Probe 'probe_hello' @('run','examples\hello.cpp','-v')
+          "===== crash events"
+          Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'} -MaxEvents 3 -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Message }
+          "===== dumpbin imports"
+          dumpbin /dependents build\CRuntime.exe
+
       - name: Smoke tests
         shell: pwsh
         continue-on-error: true
