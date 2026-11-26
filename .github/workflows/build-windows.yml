@@ -101,7 +101,7 @@ jobs:
             if (-not $p.WaitForExit(90000)) { $p.Kill() }
             ("===== smoke$i : $t  exit=0x{0:X8}" -f $p.ExitCode)
             "--- stdout"; Get-Content "smoke$i.out.txt" -ErrorAction SilentlyContinue
-            "--- stderr"; Get-Content "smoke$i.err.txt" -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\[CRuntime\] (project|MSVC|compiling)' } | Select-Object -First 12 | ForEach-Object { $_.Substring(0, [Math]::Min(300, $_.Length)) }
+            "--- stderr"; Get-Content "smoke$i.err.txt" -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\[CRuntime\] (project|MSVC|compiling)|^\[sym\]' } | Select-Object -First 30 | ForEach-Object { $_.Substring(0, [Math]::Min(300, $_.Length)) }
           }
           "################ IR of t10 main"
           $ll = Get-Content irdump\t10_sizeddelete.ll -Raw -ErrorAction SilentlyContinue
