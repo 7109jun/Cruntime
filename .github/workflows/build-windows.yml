@@ -103,14 +103,9 @@ jobs:
             "--- stdout"; Get-Content "smoke$i.out.txt" -ErrorAction SilentlyContinue
             "--- stderr"; Get-Content "smoke$i.err.txt" -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\[CRuntime\] (project|MSVC|compiling)' } | Select-Object -First 12 | ForEach-Object { $_.Substring(0, [Math]::Min(300, $_.Length)) }
           }
-          "################ IR excerpts"
-          foreach ($n in @('t11_allocator','t12_builtin','t10_sizeddelete')) {
-            "---- $n.ll : operator new/delete calls and declarations"
-            Select-String -Path "irdump\$n.ll" -Pattern '\?\?[23_]|operator|declare .*(free|malloc)' | ForEach-Object { $_.Line.Trim() } | Select-Object -First 25
-          }
-          "---- t11_allocator.ll : function bodies containing deallocate"
-          $ll = Get-Content irdump\t11_allocator.ll -Raw
-          [regex]::Matches($ll, '(?s)define [^\n]*Deallocate[^\n]*\{.*?\n\}') | Select-Object -First 2 | ForEach-Object { $_.Value.Substring(0,[Math]::Min(2500,$_.Value.Length)) }
+          "################ IR of t10 main"
+          $ll = Get-Content irdump\t10_sizeddelete.ll -Raw -ErrorAction SilentlyContinue
+          if ($ll) { [regex]::Matches($ll, '(?s)define [^\n]* @main\(.*?\n\}') | ForEach-Object { $_.Value } }
 
       - name: Package
         if: always()

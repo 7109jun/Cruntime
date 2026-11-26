@@ -38,7 +38,10 @@ public:
         // are relative to the same ImageBase (lowest section address); register every section as its own table.
         if (!failed && lo_ && hi_ - lo_ < (1ull << 31)) {
             for (auto& sec : pdata_) {
-                DWORD count = (DWORD)(sec.second / sizeof(RUNTIME_FUNCTION));
+                // RuntimeDyld appends stub space after the section data; only the leading non-empty entries are real.
+                auto* entries = (PRUNTIME_FUNCTION)sec.first;
+                DWORD maxCount = (DWORD)(sec.second / sizeof(RUNTIME_FUNCTION)), count = 0;
+                while (count < maxCount && entries[count].EndAddress != 0) ++count;
                 if (!count) continue;
                 BOOL ok = RtlAddFunctionTable((PRUNTIME_FUNCTION)sec.first, count, (DWORD64)lo_);
                 if (ok) tables_.push_back((PRUNTIME_FUNCTION)sec.first);
