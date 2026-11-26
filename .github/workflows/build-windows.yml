@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
   push:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-2022
@@ -83,15 +86,20 @@ jobs:
           cmake --build build -- -k 0
 
       - name: Smoke tests
-        shell: cmd
+        shell: pwsh
         continue-on-error: true
         run: |
-          build\CRuntime.exe run examples\hello.cpp -v > smoke1.txt 2>&1
-          type smoke1.txt
-          build\CRuntime.exe run examples\cproj > smoke2.txt 2>&1
-          type smoke2.txt
-          build\CRuntime.exe run examples\exceptions.cpp > smoke3.txt 2>&1
-          type smoke3.txt
+          # CRuntime.exe is a GUI-subsystem exe: Start-Process -Wait is required to wait for it.
+          $i = 0
+          foreach ($t in @(@('examples\hello.cpp','-v'), @('examples\cproj'), @('examples\exceptions.cpp'))) {
+            $i++
+            $a = @('run') + $t
+            $p = Start-Process -FilePath build\CRuntime.exe -ArgumentList $a -Wait -PassThru -NoNewWindow `
+                 -RedirectStandardOutput "smoke$i.out.txt" -RedirectStandardError "smoke$i.err.txt"
+            "===== smoke$i : $($t -join ' ')  exit=$($p.ExitCode)"
+            "--- stdout"; Get-Content "smoke$i.out.txt" -ErrorAction SilentlyContinue
+            "--- stderr"; Get-Content "smoke$i.err.txt" -ErrorAction SilentlyContinue
+          }
 
       - name: Package
         if: always()
@@ -102,9 +110,19 @@ jobs:
           if (Test-Path build\clang_resource) { Copy-Item build\clang_resource dist\clang_resource -Recurse }
           Copy-Item examples dist\examples -Recurse
           Copy-Item smoke*.txt dist\ -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist\* -DestinationPath CRuntime-win64.zip -Force
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: CRuntime-win64
           path: dist
+
+      - name: Publish rolling release "latest"
+        if: always() && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>$null
+          gh release create latest CRuntime-win64.zip --title "CRuntime (latest build)" --notes "Automated build of ${{ github.sha }}. Needs VS Build Tools (C++) + Windows SDK on the machine that runs it."
