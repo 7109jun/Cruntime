@@ -7,6 +7,7 @@
 
 #include <fcntl.h>
 #include <io.h>
+#include <stdlib.h>
 #include <shellapi.h>
 
 #include <algorithm>
@@ -27,14 +28,21 @@ std::string toUtf8(const wchar_t* w) {
     return s;
 }
 
-// GUI-subsystem exe: bind C stdio to inherited pipe handles, or to the parent console if any.
+void __cdecl ignoreInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t) {}
+
+// GUI-subsystem exe. When stdio handles are inherited (pipes/files from the GUI or a shell redirect) the CRT has
+// ALREADY opened fd 0..2 on them - re-wrapping the same handle and _dup2()-ing over it would close the handle and
+// make the CRT fail-fast (0xC0000409). So only bind the fds that are not usable, falling back to the parent console.
 void bindStdio() {
+    _set_invalid_parameter_handler(ignoreInvalidParameter);  // CRT misuse returns an error instead of fast-failing
     AttachConsole(ATTACH_PARENT_PROCESS);
     SetConsoleOutputCP(CP_UTF8);
     const DWORD ids[3] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
     for (int fd = 0; fd < 3; ++fd) {
+        intptr_t cur = _get_osfhandle(fd);
+        if (cur != -1 && cur != -2 && GetFileType((HANDLE)cur) != FILE_TYPE_UNKNOWN) continue;  // already usable
         HANDLE h = GetStdHandle(ids[fd]);
-        if (h && h != INVALID_HANDLE_VALUE) {
+        if (h && h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_UNKNOWN) {
             int nfd = _open_osfhandle((intptr_t)h, fd == 0 ? _O_RDONLY : _O_WRONLY);
             if (nfd >= 0 && nfd != fd) { _dup2(nfd, fd); _close(nfd); }
         } else {

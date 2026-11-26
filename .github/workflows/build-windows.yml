@@ -86,20 +86,6 @@ jobs:
             -DLLVM_DIR=C:\llvm18\lib\cmake\llvm -DClang_DIR=C:\llvm18\lib\cmake\clang
           cmake --build build -- -k 0
 
-      - name: Debugger stack of the crash
-        shell: pwsh
-        timeout-minutes: 10
-        continue-on-error: true
-        run: |
-          $cdb = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $cdb) { "cdb.exe not found"; Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Debuggers" -ErrorAction SilentlyContinue; exit 0 }
-          $p = Start-Process -FilePath $cdb.FullName -PassThru -NoNewWindow `
-               -ArgumentList @('-y','build','-c','"sxd av;sxd ibp;g;.lastevent;k 40;q"','build\CRuntime.exe','--help') `
-               -RedirectStandardOutput cdb.out.txt -RedirectStandardError cdb.err.txt
-          if (-not $p.WaitForExit(180000)) { $p.Kill(); "cdb TIMEOUT" }
-          Get-Content cdb.out.txt | Select-Object -Last 90
-          Get-Content cdb.err.txt -ErrorAction SilentlyContinue
-
       - name: Diagnostics
         shell: pwsh
         timeout-minutes: 8
