@@ -41,7 +41,7 @@ std::vector<fs::path> subdirs(const fs::path& dir) {
     }
     return r;
 }
-bool exists(const fs::path& p) {
+bool pathExists(const fs::path& p) {
     std::error_code ec;
     return fs::exists(p, ec);
 }
@@ -59,7 +59,7 @@ std::vector<std::string> splitPaths(const std::string& s) {
 
 bool findMsvc(fs::path& inc, fs::path& lib, std::string& ver) {
     std::string vct = getEnv("VCToolsInstallDir");
-    if (!vct.empty() && exists(fs::path(vct) / "include" / "vcruntime.h")) {
+    if (!vct.empty() && pathExists(fs::path(vct) / "include" / "vcruntime.h")) {
         fs::path r(vct);
         inc = r / "include";
         lib = r / "lib" / "x64";
@@ -74,7 +74,7 @@ bool findMsvc(fs::path& inc, fs::path& lib, std::string& ver) {
         for (const auto& year : subdirs(vs))
             for (const auto& edition : subdirs(year))
                 for (const auto& v : subdirs(edition / "VC" / "Tools" / "MSVC")) {
-                    if (!exists(v / "include" / "vcruntime.h")) continue;
+                    if (!pathExists(v / "include" / "vcruntime.h")) continue;
                     std::string vn = u8(v.filename());
                     if (!found || verLess(ver, vn)) {
                         inc = v / "include";
@@ -98,7 +98,7 @@ bool findSdk(fs::path& root, std::string& ver) {
     bool found = false;
     for (const auto& r : roots)
         for (const auto& v : subdirs(r / "Include")) {
-            if (!exists(v / "ucrt" / "stdio.h")) continue;
+            if (!pathExists(v / "ucrt" / "stdio.h")) continue;
             std::string vn = u8(v.filename());
             if (!found || verLess(ver, vn)) { root = r; ver = vn; found = true; }
         }
@@ -112,7 +112,7 @@ bool locateToolchain(Toolchain& tc, std::string& err) {
     fs::path res = executableDir() / "clang_resource";
     std::string envRes = getEnv("CRUNTIME_RESOURCE_DIR");
     if (!envRes.empty()) res = fs::path(envRes);
-    if (!exists(res / "include" / "stddef.h")) {
+    if (!pathExists(res / "include" / "stddef.h")) {
         err = "Clang resource headers not found: " + u8(res / "include") +
               " (copy LLVM's lib/clang/<ver>/include here, or set CRUNTIME_RESOURCE_DIR)";
         return false;
@@ -125,7 +125,7 @@ bool locateToolchain(Toolchain& tc, std::string& err) {
         bool hasVc = false;
         for (auto& d : splitPaths(envInc)) {
             tc.includeDirs.push_back(fs::path(d));
-            if (exists(fs::path(d) / "vcruntime.h")) hasVc = true;
+            if (pathExists(fs::path(d) / "vcruntime.h")) hasVc = true;
         }
         if (hasVc) {
             for (auto& d : splitPaths(getEnv("LIB"))) tc.libDirs.push_back(fs::path(d));

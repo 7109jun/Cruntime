@@ -80,7 +80,7 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
             -DLLVM_DIR=C:\llvm18\lib\cmake\llvm -DClang_DIR=C:\llvm18\lib\cmake\clang
-          cmake --build build
+          cmake --build build -- -k 0
 
       - name: Smoke tests
         shell: cmd
