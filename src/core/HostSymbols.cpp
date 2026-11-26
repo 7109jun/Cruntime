@@ -45,22 +45,27 @@ void __stdcall jitCxxThrow(void* obj, void* throwInfo) {
         return;
     }
     if (getenv("CRUNTIME_TRACE")) {
-        void* ra = _ReturnAddress();
-        DWORD64 ib = 0;
-        RUNTIME_FUNCTION* rf = RtlLookupFunctionEntry((DWORD64)ra, &ib, nullptr);
-        fprintf(stderr, "[eh] throw ra=%p throwInfo=%p base=%p rf=%p imageBase=%p\n", ra, throwInfo, (void*)base, (void*)rf, (void*)ib);
-        if (rf) {
-            auto* ui = (const unsigned char*)(ib + rf->UnwindData);
-            fprintf(stderr, "[eh]  func=[%x..%x] unwind=%x ver/flags=%02x prolog=%u codes=%u frame=%02x\n", rf->BeginAddress, rf->EndAddress,
-                    rf->UnwindData, ui[0], ui[1], ui[2], ui[3]);
-            unsigned codes = ui[2];
-            const unsigned int* hp = (const unsigned int*)(ui + 4 + ((codes + 1) & ~1u) * 2);
-            unsigned hrva = hp[0];
-            const unsigned char* h = (const unsigned char*)(ib + hrva);
-            fprintf(stderr, "[eh]  handlerRva=%x handler=%p hdataRva=%x FuncInfoRva=%x\n", hrva, (const void*)h, hp[1], hp[2]);
-            fprintf(stderr, "[eh]  handler bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],h[8],h[9],h[10],h[11]);
-            const unsigned int* fi = (const unsigned int*)(ib + hp[2]);
-            fprintf(stderr, "[eh]  FuncInfo: magic=%x maxState=%d unwindMap=%x nTry=%u tryMap=%x ip2state=%x\n", fi[0], (int)fi[1], fi[2], fi[3], fi[4], fi[5]);
+        CONTEXT ctx;
+        RtlCaptureContext(&ctx);
+        for (int fr = 0; fr < 6; ++fr) {
+            DWORD64 ib = 0;
+            RUNTIME_FUNCTION* rf = RtlLookupFunctionEntry(ctx.Rip, &ib, nullptr);
+            if (!rf) { fprintf(stderr, "[eh] frame%d rip=%p no function entry\n", fr, (void*)ctx.Rip); break; }
+            PVOID hdata = nullptr;
+            DWORD64 est = 0;
+            PEXCEPTION_ROUTINE h = RtlVirtualUnwind(UNW_FLAG_EHANDLER, ib, ctx.Rip, rf, &ctx, &hdata, &est, nullptr);
+            bool jit = imageBaseFor((void*)ib) != 0;
+            fprintf(stderr, "[eh] frame%d ib=%p func=[%x..%x] jit=%d handler=%p hdata=%p\n", fr, (void*)ib, rf->BeginAddress, rf->EndAddress, (int)jit, (void*)h, hdata);
+            if (jit && hdata) {
+                unsigned fiRva = *(const unsigned*)hdata;
+                const unsigned* fi = (const unsigned*)(ib + fiRva);
+                fprintf(stderr, "[eh]   FuncInfo@%x: magic=%x maxState=%d unwindMap=%x nTry=%u tryMap=%x nIp=%u ip2state=%x flags=%x\n", fiRva,
+                        fi[0], (int)fi[1], fi[2], fi[3], fi[4], fi[5], fi[6], fi[8]);
+                unsigned n = fi[5];
+                const unsigned* im = (const unsigned*)(ib + fi[6]);
+                for (unsigned k = 0; k < n && k < 8; ++k) fprintf(stderr, "[eh]   ip2state[%u] ip=%x state=%d\n", k, im[2*k], (int)im[2*k+1]);
+            }
+            if (!jit && fr > 0) break;
         }
     }
     ULONG_PTR params[4] = {0x01994000, (ULONG_PTR)obj, (ULONG_PTR)throwInfo, (ULONG_PTR)base};
