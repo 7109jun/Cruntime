@@ -53,16 +53,14 @@ void __stdcall jitCxxThrow(void* obj, void* throwInfo) {
             auto* ui = (const unsigned char*)(ib + rf->UnwindData);
             fprintf(stderr, "[eh]  func=[%x..%x] unwind=%x ver/flags=%02x prolog=%u codes=%u frame=%02x\n", rf->BeginAddress, rf->EndAddress,
                     rf->UnwindData, ui[0], ui[1], ui[2], ui[3]);
-            CONTEXT ctx;
-            RtlCaptureContext(&ctx);
-            // Simulate the dispatcher: virtual-unwind the caller frame asking for its exception handler.
-            ctx.Rip = (DWORD64)ra;
-            PVOID hdata = nullptr;
-            DWORD64 est = 0;
-            PEXCEPTION_ROUTINE h = RtlVirtualUnwind(UNW_FLAG_EHANDLER, ib, (DWORD64)ra, rf, &ctx, &hdata, &est, nullptr);
-            fprintf(stderr, "[eh]  handler=%p hdata=%p (hdata-base=%llx)\n", (void*)h, hdata, (unsigned long long)((DWORD64)hdata - ib));
-            if (h) { const unsigned char* b = (const unsigned char*)h; fprintf(stderr, "[eh]  handler bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]); }
-            if (hdata) { const unsigned int* d = (const unsigned int*)hdata; fprintf(stderr, "[eh]  FuncInfo rva=%x\n", d[0]); }
+            unsigned codes = ui[2];
+            const unsigned int* hp = (const unsigned int*)(ui + 4 + ((codes + 1) & ~1u) * 2);
+            unsigned hrva = hp[0];
+            const unsigned char* h = (const unsigned char*)(ib + hrva);
+            fprintf(stderr, "[eh]  handlerRva=%x handler=%p hdataRva=%x FuncInfoRva=%x\n", hrva, (const void*)h, hp[1], hp[2]);
+            fprintf(stderr, "[eh]  handler bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],h[8],h[9],h[10],h[11]);
+            const unsigned int* fi = (const unsigned int*)(ib + hp[2]);
+            fprintf(stderr, "[eh]  FuncInfo: magic=%x maxState=%d unwindMap=%x nTry=%u tryMap=%x ip2state=%x\n", fi[0], (int)fi[1], fi[2], fi[3], fi[4], fi[5]);
         }
     }
     ULONG_PTR params[4] = {0x01994000, (ULONG_PTR)obj, (ULONG_PTR)throwInfo, (ULONG_PTR)base};
