@@ -107,14 +107,6 @@ jobs:
           $ll = Get-Content irdump\t10_sizeddelete.ll -Raw -ErrorAction SilentlyContinue
           if ($ll) { [regex]::Matches($ll, '(?s)define [^\n]* @main\(.*?\n\}') | ForEach-Object { $_.Value } }
 
-      - name: Debug exceptions (cdb)
-        shell: cmd
-        continue-on-error: true
-        timeout-minutes: 5
-        run: |
-          set CDB="C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
-          %CDB% -G -y build -c "sxd av;sxd ibp;sxe e06d7363;g;k 12;.frame 1;.fnent @$ip;.frame 2;.fnent @$ip;.frame 3;.fnent @$ip;q" build\CRuntime.exe run tests\jit\t9_throw.cpp 2>&1 | findstr /v /c:"[sym]" | more
-
       - name: Package
         if: always()
         shell: pwsh

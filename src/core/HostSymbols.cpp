@@ -1,5 +1,8 @@
 // NOTE: compiled with RTTI enabled (/GR) - see CMakeLists.txt - only to read the type_info vtable address.
 #include "HostSymbols.h"
+#include <intrin.h>
+#include <cstdio>
+#include <cstdlib>
 #include "ImageRegistry.h"
 
 #include <windows.h>
@@ -40,6 +43,27 @@ void __stdcall jitCxxThrow(void* obj, void* throwInfo) {
     if (!base) {
         real(obj, throwInfo);
         return;
+    }
+    if (getenv("CRUNTIME_TRACE")) {
+        void* ra = _ReturnAddress();
+        DWORD64 ib = 0;
+        RUNTIME_FUNCTION* rf = RtlLookupFunctionEntry((DWORD64)ra, &ib, nullptr);
+        fprintf(stderr, "[eh] throw ra=%p throwInfo=%p base=%p rf=%p imageBase=%p\n", ra, throwInfo, (void*)base, (void*)rf, (void*)ib);
+        if (rf) {
+            auto* ui = (const unsigned char*)(ib + rf->UnwindData);
+            fprintf(stderr, "[eh]  func=[%x..%x] unwind=%x ver/flags=%02x prolog=%u codes=%u frame=%02x\n", rf->BeginAddress, rf->EndAddress,
+                    rf->UnwindData, ui[0], ui[1], ui[2], ui[3]);
+            CONTEXT ctx;
+            RtlCaptureContext(&ctx);
+            // Simulate the dispatcher: virtual-unwind the caller frame asking for its exception handler.
+            ctx.Rip = (DWORD64)ra;
+            PVOID hdata = nullptr;
+            DWORD64 est = 0;
+            PEXCEPTION_ROUTINE h = RtlVirtualUnwind(UNW_FLAG_EHANDLER, ib, (DWORD64)ra, rf, &ctx, &hdata, &est, nullptr);
+            fprintf(stderr, "[eh]  handler=%p hdata=%p (hdata-base=%llx)\n", (void*)h, hdata, (unsigned long long)((DWORD64)hdata - ib));
+            if (h) { const unsigned char* b = (const unsigned char*)h; fprintf(stderr, "[eh]  handler bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]); }
+            if (hdata) { const unsigned int* d = (const unsigned int*)hdata; fprintf(stderr, "[eh]  FuncInfo rva=%x\n", d[0]); }
+        }
     }
     ULONG_PTR params[4] = {0x01994000, (ULONG_PTR)obj, (ULONG_PTR)throwInfo, (ULONG_PTR)base};
     RaiseException(0xE06D7363, EXCEPTION_NONCONTINUABLE, 4, params);
