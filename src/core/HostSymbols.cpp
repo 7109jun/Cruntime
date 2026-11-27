@@ -65,6 +65,23 @@ void __stdcall jitCxxThrow(void* obj, void* throwInfo) {
                 const unsigned* im = (const unsigned*)(ib + fi[6]);
                 for (unsigned k = 0; k < n && k < 8; ++k) fprintf(stderr, "[eh]   ip2state[%u] ip=%x state=%d\n", k, im[2*k], (int)im[2*k+1]);
             }
+            if (jit && hdata && fr == 1) {
+                unsigned fiRva = *(const unsigned*)hdata;
+                const unsigned* fi = (const unsigned*)(ib + fiRva);
+                const unsigned* tm = (const unsigned*)(ib + fi[4]);
+                fprintf(stderr, "[eh]   try: low=%d high=%d catchHigh=%d nCatch=%d handlers=%x\n", (int)tm[0], (int)tm[1], (int)tm[2], (int)tm[3], tm[4]);
+                const unsigned* ha = (const unsigned*)(ib + tm[4]);
+                fprintf(stderr, "[eh]   catch: adj=%x pType=%x disp=%d addr=%x frameOff=%x\n", ha[0], ha[1], (int)ha[2], ha[3], ha[4]);
+                if (ha[1]) fprintf(stderr, "[eh]   catch type name='%s' vtbl=%p\n", (const char*)(ib + ha[1] + 16), *(void**)(ib + ha[1]));
+                const unsigned* ti = (const unsigned*)throwInfo;
+                fprintf(stderr, "[eh]   throwInfo: attr=%x unwind=%x fwd=%x cta=%x\n", ti[0], ti[1], ti[2], ti[3]);
+                const unsigned* cta = (const unsigned*)(base + ti[3]);
+                fprintf(stderr, "[eh]   cta n=%d\n", (int)cta[0]);
+                for (int k = 0; k < (int)cta[0] && k < 4; ++k) {
+                    const unsigned* ct = (const unsigned*)(base + cta[1 + k]);
+                    fprintf(stderr, "[eh]   ct[%d] props=%x pType=%x size=%d copy=%x name='%s' vtbl=%p\n", k, ct[0], ct[1], (int)ct[5], ct[6], (const char*)(base + ct[1] + 16), *(void**)(base + ct[1]));
+                }
+            }
             if (!jit && fr > 0) break;
         }
     }
