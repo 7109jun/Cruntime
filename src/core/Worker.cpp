@@ -1,4 +1,6 @@
 #include "Worker.h"
+#include <algorithm>
+#include <atomic>
 
 #include <windows.h>
 
@@ -133,22 +135,46 @@ int runPipeline(const RunOptions& o) {
     co.optLevel = o.optLevel;
     co.exceptions = o.exceptions;
     co.verbose = o.verbose;
+    // Translation units compile in parallel (each has its own LLVMContext); results are reported in source order.
+    struct Job { CompiledUnit u; std::string diag; bool ok = false; };
+    std::vector<Job> jobs(spec.sources.size());
+    {
+        struct Ctx { std::atomic<size_t> next{0}; std::vector<Job>* jobs; const ProjectSpec* spec; const Toolchain* tc; const CompileOptions* co; };
+        Ctx cx;
+        cx.jobs = &jobs; cx.spec = &spec; cx.tc = &tc; cx.co = &co;
+        auto work = [](LPVOID p) -> DWORD {
+            auto* c = (Ctx*)p;
+            for (size_t i; (i = c->next++) < c->jobs->size();) {
+                auto& jb = (*c->jobs)[i];
+                jb.ok = compileSource(c->spec->sources[i], *c->spec, *c->tc, *c->co, jb.u, jb.diag);
+            }
+            return 0;
+        };
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        size_t nt = std::min<size_t>(std::min<size_t>(si.dwNumberOfProcessors, 8), jobs.size());
+        std::vector<HANDLE> ths;
+        for (size_t t = 1; t < nt; ++t) {
+            HANDLE h = CreateThread(nullptr, 128u << 20, work, &cx, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+            if (h) ths.push_back(h);
+        }
+        work(&cx);  // this thread (large stack) participates too
+        for (HANDLE h : ths) { WaitForSingleObject(h, INFINITE); CloseHandle(h); }
+    }
     std::vector<CompiledUnit> units;
     bool failed = false;
-    for (const auto& src : spec.sources) {
-        if (o.verbose) err("compiling " + u8(src.path));
-        CompiledUnit u;
-        std::string diag;
-        bool ok = compileSource(src, spec, tc, co, u, diag);
-        if (!diag.empty()) { std::fputs(diag.c_str(), stderr); if (diag.back() != '\n') std::fputc('\n', stderr); }
-        if (ok && !o.dumpIrDir.empty()) {
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        const auto& src = spec.sources[i];
+        auto& jb = jobs[i];
+        if (o.verbose) err("compiled " + u8(src.path));
+        if (!jb.diag.empty()) { std::fputs(jb.diag.c_str(), stderr); if (jb.diag.back() != '\n') std::fputc('\n', stderr); }
+        if (jb.ok && !o.dumpIrDir.empty()) {
             std::error_code ec;
             fs::create_directories(o.dumpIrDir, ec);
             std::string path = u8(o.dumpIrDir / (u8(src.path.stem()) + ".ll"));
             llvm::raw_fd_ostream os(path, ec);
-            if (!ec) u.mod->print(os, nullptr);
+            if (!ec) jb.u.mod->print(os, nullptr);
         }
-        if (ok) units.push_back(std::move(u));
+        if (jb.ok) units.push_back(std::move(jb.u));
         else failed = true;
     }
     if (failed) { err("compilation failed"); return 2; }
