@@ -1,40 +1,37 @@
-# CRuntime 개발 로드맵
+# CRuntime 로드맵
 
-확정 결정: **자체 CMake 인터프리터**(디스크 쓰기 0, cmake 불필요) · **LLVM 직접 빌드 + 정적 링크**, 표준 라이브러리 헤더는 설치된 **VS Build Tools + Windows SDK** 사용.
+## 확정한 결정
 
-## 아키텍처
+- CMake는 **자체 인터프리터**로 처리한다. 디스크에 쓰지 않고, 시스템에 cmake가 없어도 된다.
+- LLVM/Clang은 **직접 빌드해 정적으로 링크**한다. 표준 라이브러리 헤더는 설치된 **VS Build Tools와 Windows SDK**를 쓴다.
+- 실행은 별도의 작업 프로세스에서 한다. 종료 버튼, 크래시 격리, `exit()` 처리를 안전하게 하기 위해서다.
 
-```
-CRuntime.exe (GUI)  ── 드롭/선택 ──▶  CRuntime.exe run <input>   (자기 자신을 작업 프로세스로 실행, Job Object로 묶음)
-                                         │  stdout/stderr/stdin = 파이프 (디스크 파일 없음)
-   Scanner ─ 단일 파일 / 폴더 / 여러 파일
-      └─ CMakeInterp ─ CMakeLists.txt / CMake.txt (메모리 내 해석)
-   Toolchain ─ MSVC STL · UCRT · SDK 경로 탐지 (INCLUDE/LIB 또는 VS 설치 탐색)
-   Compiler  ─ clang::CompilerInstance + EmitLLVMOnlyAction  → llvm::Module (메모리)
-   JitEngine ─ LLJIT: IR 모듈 추가 → 네이티브 코드(메모리) → initialize → main 호출
-                ├ DynamicLibrarySearchGenerator (프로세스/CRT DLL 심볼)
-                ├ ImportGenerator (__imp_ 심볼 합성)
-                └ 외부 라이브러리: .dll(LoadLibrary) / .lib(StaticLibraryDefinitionGenerator)
-```
-
-작업 프로세스 분리 이유: `종료` = `TerminateJobObject`로 안전 종료, JIT 코드가 죽어도 GUI는 생존, `exit()`/크래시 격리.
-
-## 단계
+## 진행 상황
 
 | 단계 | 내용 | 상태 |
 |---|---|---|
-| M0 | 프로젝트 골격, CMake 빌드, manifest | 완료 |
-| M1 | 입력 분석(Scanner) + CMake 인터프리터 (if/foreach/function/macro/file(GLOB)/add_subdirectory/타깃 속성 전파) | 완료 · Linux에서 검증 |
-| M2 | Clang 프론트엔드 → IR, 진단 출력 | 완료 · Windows 검증 (GUI는 빌드만) |
-| M3 | ORC LLJIT, 다중 모듈 링크, __imp_ 처리, 외부 라이브러리, 진입점 탐지 | 완료 · Windows 검증 (GUI는 빌드만) |
-| M4 | Win32 GUI: 드래그앤드롭, 실행/종료, 출력/stdin, 옵션 | 완료 · Windows 검증 (GUI는 빌드만) |
-| M5 | 안정화: LLVM 버전 고정 후 컴파일 오류 수정, 예제 전체 실행 | 다음 |
-| M6 | C++ 예외/SEH: `.pdata` 등록, 개인함수 로컬 스텁(RVA 범위), `_CxxThrowException` 대체 | **완료 · Windows 검증** |
-| M7 | 병렬 컴파일(TU별 스레드), 증분 캐시(메모리 한정) | 계획 |
-| M8 | CMake 확장: `find_package` 일부, 제너레이터 식 확대, `configure_file`(메모리 내) | 계획 |
+| M0 | 프로젝트 골격, CMake 빌드, 매니페스트 | 완료 |
+| M1 | 입력 분석기와 CMake 인터프리터 | 완료 |
+| M2 | Clang 프론트엔드에서 IR 생성, 진단 출력 | 완료 |
+| M3 | ORC JIT, 다중 모듈 링크, `__imp_` 처리, 외부 라이브러리, 진입점 탐지 | 완료 |
+| M4 | Win32 GUI: 드래그 앤 드롭, 실행/종료, 출력, 표준 입력 | 완료(GUI 실사용 검증은 남음) |
+| M5 | 안정화: CI에서 예제와 JIT 테스트 전체 실행 | 완료 |
+| M6 | C++ 예외와 SEH 언와인드 | 완료 |
+| M7 | 소스 파일 병렬 컴파일 | 완료 |
+| M8 | CMake 확장: `configure_file`, `file(WRITE/APPEND)`, 제너레이터 식 | 대부분 완료(`find_package`는 `Threads`만) |
+| M9 | 탐색기 연결(더블클릭 실행), Build Tools 설치 안내 | 완료(실사용 검증은 남음) |
+
+## 다음 작업
+
+1. Build Tools가 설치된 PC에서 GUI 실사용 검증(드래그 앤 드롭, 종료 버튼, 표준 입력, 탐색기 연결).
+2. GUI 출력창에서 보고된 줄 어긋남 현상의 원인 확인.
+3. Build Tools 없이 실행하는 방법 결정. 헤더를 번들하는 방식과 첫 실행 때 툴체인을 내려받는 방식을 비교해야 한다. 라이선스와 크기가 쟁점이다.
+4. `find_package`의 지원 범위 확대.
+5. 증분 캐시(메모리 한정).
 
 ## 알려진 제약
-- 대상: x64 Windows, LLVM/Clang **18.x–19.x** (API 버전 의존).
-- CMake는 인터프리터 부분집합. 지원하지 않는 명령은 경고 후 무시.
-- `.h` 단일 입력은 C, `.hpp/.hh/.hxx`는 C++ 로 컴파일(헤더 안에 `main`이 있어야 실행됨).
-- 사용자 PC에 VS Build Tools(C++) + Windows SDK 필요.
+
+- 대상은 x64 Windows이고, LLVM/Clang 18.x이다. API가 버전에 의존한다.
+- CMake는 부분집합만 지원한다. 지원하지 않는 명령은 경고를 내고 무시한다.
+- `.h` 단일 입력은 C로, `.hpp`/`.hh`/`.hxx`는 C++로 컴파일한다. 헤더 안에 `main`이 있어야 실행된다.
+- 실행하는 PC에 Build Tools(C++)와 Windows SDK가 필요하다.
