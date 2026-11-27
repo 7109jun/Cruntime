@@ -25,11 +25,11 @@ CRuntime.exe (GUI)  ── 드롭/선택 ──▶  CRuntime.exe run <input>   (
 |---|---|---|
 | M0 | 프로젝트 골격, CMake 빌드, manifest | 완료 |
 | M1 | 입력 분석(Scanner) + CMake 인터프리터 (if/foreach/function/macro/file(GLOB)/add_subdirectory/타깃 속성 전파) | 완료 · Linux에서 검증 |
-| M2 | Clang 프론트엔드 → IR, 진단 출력 | 작성 완료 · **Windows 빌드 검증 필요** |
-| M3 | ORC LLJIT, 다중 모듈 링크, __imp_ 처리, 외부 라이브러리, 진입점 탐지 | 작성 완료 · **Windows 빌드 검증 필요** |
-| M4 | Win32 GUI: 드래그앤드롭, 실행/종료, 출력/stdin, 옵션 | 작성 완료 · **Windows 빌드 검증 필요** |
+| M2 | Clang 프론트엔드 → IR, 진단 출력 | 완료 · Windows 검증 (GUI는 빌드만) |
+| M3 | ORC LLJIT, 다중 모듈 링크, __imp_ 처리, 외부 라이브러리, 진입점 탐지 | 완료 · Windows 검증 (GUI는 빌드만) |
+| M4 | Win32 GUI: 드래그앤드롭, 실행/종료, 출력/stdin, 옵션 | 완료 · Windows 검증 (GUI는 빌드만) |
 | M5 | 안정화: LLVM 버전 고정 후 컴파일 오류 수정, 예제 전체 실행 | 다음 |
-| M6 | **C++ 예외/SEH 언와인드**: `SehMemoryManager`가 JIT 객체의 `.pdata`를 `RtlAddFunctionTable`로 등록 | 작성 완료 · LLVM 18 헤더 컴파일 검증, **Windows 실행 검증 필요** (`examples\exceptions.cpp`) |
+| M6 | C++ 예외/SEH: `.pdata` 등록, 개인함수 로컬 스텁(RVA 범위), `_CxxThrowException` 대체 | **완료 · Windows 검증** |
 | M7 | 병렬 컴파일(TU별 스레드), 증분 캐시(메모리 한정) | 계획 |
 | M8 | CMake 확장: `find_package` 일부, 제너레이터 식 확대, `configure_file`(메모리 내) | 계획 |
 

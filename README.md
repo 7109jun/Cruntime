@@ -45,6 +45,7 @@ cmake -S . -B build-core -DCRUNTIME_BUILD_CORE_TESTS=ON && cmake --build build-c
 build-core/cr_scan_test examples/cproj
 ```
 
-## 주의
-- 이 환경(Linux)에는 MSVC가 없어 Windows 전용 부분은 **실행 검증을 하지 못했습니다.** 코어(Scanner/CMake 인터프리터)는 실행 검증, `Compiler.cpp`/`JitEngine.cpp`는 LLVM 18.1.3 실제 헤더로 문법(컴파일) 검증만 통과했습니다. GUI/Toolchain/main은 미검증이므로 첫 Windows 빌드에서 소규모 오류가 날 수 있습니다.
-- JIT 코드 내부 C++ 예외는 `.pdata` 등록(SehMemoryManager)으로 지원하도록 구현했으나 Windows 실행 검증 전입니다. `examples\exceptions.cpp`로 먼저 확인하세요. 실패하면 `--no-exceptions` 사용.
+## 상태
+Windows(GitHub Actions, windows-2022)에서 실행 검증 완료: C/C++ 단일·다중 파일, CMake 프로젝트, STL(iostream/vector/string), new/delete, **C++ 예외(throw/catch)**.
+GUI(드래그 앤 드롭/중지/stdin)는 빌드만 검증되었고 실사용 테스트는 아직입니다.
+최신 exe: Releases → `latest` (CRuntime-win64.zip). 실행 PC에는 VS Build Tools(C++) + Windows SDK 필요.
