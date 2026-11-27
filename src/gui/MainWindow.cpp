@@ -2,6 +2,7 @@
 
 #include <commctrl.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
 
 #include <algorithm>
@@ -13,7 +14,8 @@ namespace {
 
 enum {
     IDC_FILE = 101, IDC_DIR, IDC_RUN, IDC_STOP, IDC_CLEAR, IDC_OPT, IDC_ARGS, IDC_OUT, IDC_IN, IDC_PATH, IDC_STATUS,
-    IDC_LBL_OPT, IDC_LBL_ARGS, IDC_LBL_IN
+    IDC_LBL_OPT, IDC_LBL_ARGS, IDC_LBL_IN,
+    IDM_ASSOC_ON = 201, IDM_ASSOC_OFF, IDM_INSTALL_MSVC
 };
 constexpr UINT WM_APP_OUT = WM_APP + 1;   // wParam = generation, lParam = std::wstring*
 constexpr UINT WM_APP_EXIT = WM_APP + 2;  // wParam = generation, lParam = exit code
@@ -35,6 +37,81 @@ struct App {
     ULONGLONG t0 = 0;
     std::vector<std::wstring> inputs;
 } g;
+
+
+std::wstring exePath() {
+    wchar_t b[MAX_PATH * 2];
+    DWORD n = GetModuleFileNameW(nullptr, b, (DWORD)std::size(b));
+    return std::wstring(b, n);
+}
+bool regSet(const std::wstring& key, const wchar_t* name, const std::wstring& val) {
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, (L"Software\\Classes\\" + key).c_str(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &k,
+                        nullptr) != ERROR_SUCCESS)
+        return false;
+    LONG r = RegSetValueExW(k, name, 0, REG_SZ, (const BYTE*)val.c_str(), (DWORD)((val.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS;
+}
+const wchar_t* kExts[] = {L".c", L".cpp", L".cc", L".cxx"};
+
+// Per-user (HKCU, no admin): double-click opens CRuntime and runs the file; also an always-available
+// "CRuntime으로 실행" context-menu entry (Windows may keep another program as the default opener).
+bool registerAssoc() {
+    std::wstring exe = exePath();
+    std::wstring cmd = L"\"" + exe + L"\" \"%1\"";
+    bool ok = regSet(L"CRuntime.Source", nullptr, L"C/C++ 소스 (CRuntime)");
+    ok &= regSet(L"CRuntime.Source\\DefaultIcon", nullptr, exe + L",0");
+    ok &= regSet(L"CRuntime.Source\\shell\\open", nullptr, L"CRuntime으로 실행");
+    ok &= regSet(L"CRuntime.Source\\shell\\open\\command", nullptr, cmd);
+    for (auto e : kExts) {
+        ok &= regSet(e, nullptr, L"CRuntime.Source");
+        ok &= regSet(std::wstring(e) + L"\\OpenWithProgids", L"CRuntime.Source", L"");
+        std::wstring v = std::wstring(L"SystemFileAssociations\\") + e + L"\\shell\\CRuntime";
+        ok &= regSet(v, nullptr, L"CRuntime으로 실행");
+        ok &= regSet(v, L"Icon", exe + L",0");
+        ok &= regSet(v + L"\\command", nullptr, cmd);
+    }
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    return ok;
+}
+void unregisterAssoc() {
+    RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\CRuntime.Source");
+    for (auto e : kExts) {
+        RegDeleteTreeW(HKEY_CURRENT_USER, (std::wstring(L"Software\\Classes\\SystemFileAssociations\\") + e + L"\\shell\\CRuntime").c_str());
+        HKEY k;
+        std::wstring key = std::wstring(L"Software\\Classes\\") + e;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, key.c_str(), 0, KEY_SET_VALUE | KEY_QUERY_VALUE, &k) == ERROR_SUCCESS) {
+            wchar_t v[64]; DWORD n = sizeof(v);
+            if (RegQueryValueExW(k, nullptr, nullptr, nullptr, (BYTE*)v, &n) == ERROR_SUCCESS && wcscmp(v, L"CRuntime.Source") == 0)
+                RegDeleteValueW(k, nullptr);
+            RegCloseKey(k);
+        }
+        RegDeleteKeyValueW(HKEY_CURRENT_USER, (key + L"\\OpenWithProgids").c_str(), L"CRuntime.Source");
+    }
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+}
+
+// Installs VS Build Tools (C++ workload, includes the Windows SDK) via winget in a visible console window.
+void installMsvc(HWND owner) {
+    if (MessageBoxW(owner,
+                    L"표준 라이브러리 헤더(MSVC + Windows SDK)가 이 PC에 없습니다.\n"
+                    L"Visual Studio Build Tools(C++ 작업 로드)를 지금 설치할까요? (약 3~6GB, 관리자 권한 필요)\n"
+                    L"설치가 끝나면 다시 실행하세요.",
+                    L"CRuntime", MB_YESNO | MB_ICONQUESTION) != IDYES)
+        return;
+    const wchar_t* args =
+        L"/c winget install --id Microsoft.VisualStudio.2022.BuildTools -e --accept-package-agreements --accept-source-agreements "
+        L"--override \"--passive --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\" & pause";
+    SHELLEXECUTEINFOW sei{sizeof(sei)};
+    sei.hwnd = owner;
+    sei.lpVerb = L"runas";
+    sei.lpFile = L"cmd.exe";
+    sei.lpParameters = args;
+    sei.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&sei))
+        MessageBoxW(owner, L"설치를 시작하지 못했습니다. https://visualstudio.microsoft.com/downloads/ 에서\n\"Build Tools for Visual Studio\"를 받아 C++ 데스크톱 개발 작업 로드를 설치하세요.", L"CRuntime", MB_OK | MB_ICONWARNING);
+}
 
 std::wstring getText(HWND h) {
     int n = GetWindowTextLengthW(h);
@@ -334,6 +411,13 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SetWindowSubclass(g.args, dropSubclass, 1, 0);
             SetWindowSubclass(g.in, inputSubclass, 2, 0);
             setRunningUi(false);
+            HMENU bar = CreateMenu(), set = CreatePopupMenu();
+            AppendMenuW(set, MF_STRING, IDM_ASSOC_ON, L".c/.cpp 더블클릭으로 실행 (탐색기 연결 등록)");
+            AppendMenuW(set, MF_STRING, IDM_ASSOC_OFF, L"탐색기 연결 해제");
+            AppendMenuW(set, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(set, MF_STRING, IDM_INSTALL_MSVC, L"Build Tools(C++/SDK) 설치...");
+            AppendMenuW(bar, MF_POPUP, (UINT_PTR)set, L"설정");
+            SetMenu(hwnd, bar);
             return 0;
         }
         case WM_SIZE:
@@ -357,6 +441,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_RUN: startRun(); return 0;
                 case IDC_STOP: stopRun(); return 0;
                 case IDC_CLEAR: SetWindowTextW(g.out, L""); return 0;
+                case IDM_ASSOC_ON:
+                    MessageBoxW(hwnd, registerAssoc() ? L"등록했습니다. .c/.cpp 파일을 더블클릭하면 실행됩니다.\n(다른 프로그램이 기본값이면 우클릭 → \"CRuntime으로 실행\")"
+                                                      : L"등록에 실패했습니다.", L"CRuntime", MB_OK);
+                    return 0;
+                case IDM_ASSOC_OFF: unregisterAssoc(); MessageBoxW(hwnd, L"연결을 해제했습니다.", L"CRuntime", MB_OK); return 0;
+                case IDM_INSTALL_MSVC: installMsvc(hwnd); return 0;
             }
             break;
         case WM_DROPFILES: {
@@ -388,6 +478,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             setStatus(b);
             closeChild();
             setRunningUi(false);
+            if ((int)lp == 4) installMsvc(hwnd);  // toolchain headers missing
             return 0;
         }
         case WM_CLOSE:
