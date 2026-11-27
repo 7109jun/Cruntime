@@ -344,6 +344,21 @@ private:
         if (head == "PLATFORM_ID") return tail.find("Windows") != std::string::npos ? "1" : "0";
         if (head == "COMPILE_LANGUAGE") return tail == "CXX" ? "1" : "0";
         if (head == "BOOL") return (trueConst(tail) ? "1" : "0");
+        if (head == "NOT") return tail == "1" ? "0" : "1";
+        auto parts = [&](const std::string& t) {
+            std::vector<std::string> v;
+            std::string cur;
+            for (char ch : t) { if (ch == ',') { v.push_back(cur); cur.clear(); } else cur += ch; }
+            v.push_back(cur);
+            return v;
+        };
+        if (head == "IF") { auto p = parts(tail); return p.size() == 3 ? (p[0] == "1" ? p[1] : p[2]) : ""; }
+        if (head == "AND") { for (auto& x : parts(tail)) if (x != "1") return "0"; return "1"; }
+        if (head == "OR") { for (auto& x : parts(tail)) if (x == "1") return "1"; return "0"; }
+        if (head == "STREQUAL") { auto p = parts(tail); return p.size() == 2 && p[0] == p[1] ? "1" : "0"; }
+        if (head == "EQUAL") { auto p = parts(tail); return p.size() == 2 && p[0] == p[1] ? "1" : "0"; }
+        if (head == "TARGET_EXISTS") return findTarget(tail) ? "1" : "0";
+        if (head == "JOIN") { auto p = parts(tail); std::string r; for (size_t i = 1; i < p.size(); ++i) r += (i > 1 ? p[0] : "") + p[i]; return r; }
         return "";
     }
     std::string expand(const std::string& s) {
@@ -1096,7 +1111,18 @@ private:
             setVar(A[2], s);
         } else if (sub == "REAL_PATH" && A.size() >= 3) {
             setVar(A[2], gen(absPath(A[1])));
-        } else if (sub == "WRITE" || sub == "APPEND" || sub == "MAKE_DIRECTORY" || sub == "COPY" || sub == "REMOVE" ||
+        } else if ((sub == "WRITE" || sub == "APPEND") && A.size() >= 2) {
+            // Generated text files live in memory only (served to Clang through the VFS overlay).
+            fs::path out(A[1]);
+            if (!out.is_absolute()) out = curDir_ / out;
+            out = normalize(out);
+            std::string text;
+            for (size_t i = 2; i < A.size(); ++i) text += A[i];
+            bool found = false;
+            for (auto& v : spec_.virtualFiles)
+                if (v.first == out) { v.second = sub == "APPEND" ? v.second + text : text; found = true; break; }
+            if (!found) spec_.virtualFiles.emplace_back(out, std::move(text));
+        } else if (sub == "MAKE_DIRECTORY" || sub == "COPY" || sub == "REMOVE" ||
                    sub == "REMOVE_RECURSE" || sub == "RENAME" || sub == "DOWNLOAD" || sub == "GENERATE") {
             warn("file(" + sub + ") ignored (CRuntime never writes to disk)");
         } else warn("file(" + sub + ") is not supported");

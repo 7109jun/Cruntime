@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "config.h"
+#include "gen.h"
 int main(void) {
     printf("version %s\n", APP_VERSION);
 #ifdef HAVE_FOO
@@ -10,5 +11,6 @@ int main(void) {
 #else
     puts("bar off");
 #endif
+    printf("gen %d use=%d\n", GEN_VALUE, USE_GEN);
     return 0;
 }
