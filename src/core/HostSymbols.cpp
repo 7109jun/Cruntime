@@ -85,7 +85,7 @@ void __stdcall jitCxxThrow(void* obj, void* throwInfo) {
             if (!jit && fr > 0) break;
         }
     }
-    ULONG_PTR params[4] = {0x01994000, (ULONG_PTR)obj, (ULONG_PTR)throwInfo, (ULONG_PTR)base};
+    ULONG_PTR params[4] = {0x19930520, (ULONG_PTR)obj, (ULONG_PTR)throwInfo, (ULONG_PTR)base};
     RaiseException(0xE06D7363, EXCEPTION_NONCONTINUABLE, 4, params);
 }
 
