@@ -1,3 +1,5 @@
+#include <sstream>
+#include <fstream>
 #include "CMakeInterp.h"
 
 #include <cstdlib>
@@ -285,9 +287,9 @@ public:
         setVar("CMAKE_SOURCE_DIR", gen(rootDir_));
         setVar("CMAKE_CURRENT_SOURCE_DIR", gen(rootDir_));
         setVar("PROJECT_SOURCE_DIR", gen(rootDir_));
-        setVar("CMAKE_BINARY_DIR", "<memory>/build");
-        setVar("CMAKE_CURRENT_BINARY_DIR", "<memory>/build");
-        setVar("PROJECT_BINARY_DIR", "<memory>/build");
+        setVar("CMAKE_BINARY_DIR", gen(rootDir_ / ".cruntime-build"));
+        setVar("CMAKE_CURRENT_BINARY_DIR", gen(rootDir_ / ".cruntime-build"));
+        setVar("PROJECT_BINARY_DIR", gen(rootDir_ / ".cruntime-build"));
         setVar("CMAKE_CURRENT_LIST_DIR", gen(rootDir_));
         setVar("CMAKE_CURRENT_LIST_FILE", gen(normalize(file)));
         setVar("WIN32", "1");
@@ -655,6 +657,64 @@ private:
     }
 
     // ---- paths / targets
+    static bool cmTrue(std::string v) {
+        for (auto& ch : v) ch = (char)std::toupper((unsigned char)ch);
+        if (v.empty() || v == "0" || v == "OFF" || v == "NO" || v == "FALSE" || v == "N" || v == "IGNORE" || v == "NOTFOUND") return false;
+        return !(v.size() > 9 && v.compare(v.size() - 9, 9, "-NOTFOUND") == 0);
+    }
+    std::string substVars(const std::string& line, bool atOnly) {
+        static const std::regex at(R"(@([A-Za-z0-9_./+\-]+)@)");
+        static const std::regex dl(R"(\$\{([A-Za-z0-9_./+\-]+)\})");
+        auto apply = [&](const std::string& in, const std::regex& re) {
+            std::string out;
+            auto b = in.cbegin();
+            for (std::sregex_iterator it(in.begin(), in.end(), re), end; it != end; ++it) {
+                out.append(b, in.cbegin() + it->position());
+                out += getVar((*it)[1].str());
+                b = in.cbegin() + it->position() + it->length();
+            }
+            out.append(b, in.cend());
+            return out;
+        };
+        std::string r = apply(line, at);
+        return atOnly ? r : apply(r, dl);
+    }
+    // configure_file(<in> <out> [COPYONLY] [@ONLY]): the result lives in memory only (spec_.virtualFiles) and is served
+    // to Clang through an in-memory file system overlay.
+    void configureFile(const std::vector<std::string>& A) {
+        if (A.size() < 2) return;
+        bool copyOnly = false, atOnly = false;
+        for (size_t i = 2; i < A.size(); ++i) { if (A[i] == "COPYONLY") copyOnly = true; else if (A[i] == "@ONLY") atOnly = true; }
+        fs::path in = absPath(A[0]);
+        fs::path out(A[1]);
+        if (!out.is_absolute()) out = fs::path(getVar("CMAKE_CURRENT_BINARY_DIR")) / out;
+        out = normalize(out);
+        std::ifstream f(in, std::ios::binary);
+        if (!f) { warn("configure_file: cannot read " + gen(in)); return; }
+        std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (!copyOnly) {
+            static const std::regex def(R"(^(\s*)#cmakedefine(01)?\s+([A-Za-z0-9_]+)(.*)$)");
+            std::string res, line;
+            std::istringstream ss(text);
+            while (std::getline(ss, line)) {
+                bool cr = !line.empty() && line.back() == '\r';
+                if (cr) line.pop_back();
+                std::smatch m;
+                if (std::regex_match(line, m, def)) {
+                    bool on = cmTrue(getVar(m[3].str()));
+                    if (m[2].matched && m[2].length()) line = m[1].str() + "#define " + m[3].str() + (on ? " 1" : " 0");
+                    else line = on ? m[1].str() + "#define " + m[3].str() + substVars(m[4].str(), atOnly)
+                                   : m[1].str() + "/* #undef " + m[3].str() + " */";
+                } else {
+                    line = substVars(line, atOnly);
+                }
+                res += line + (cr ? "\r\n" : "\n");
+            }
+            text = res;
+        }
+        spec_.virtualFiles.emplace_back(out, std::move(text));
+    }
+
     fs::path absPath(const std::string& s) const {
         fs::path p(s);
         return normalize(p.is_absolute() ? p : curDir_ / p);
@@ -793,9 +853,10 @@ private:
                 setVar("PROJECT_SOURCE_DIR", gen(curDir_));
                 if (spec_.name.empty()) spec_.name = A[0];
             }
-        } else if (n == "add_custom_target" || n == "add_custom_command" || n == "configure_file" ||
-                   n == "add_library_dummy") {
+        } else if (n == "add_custom_target" || n == "add_custom_command" || n == "add_library_dummy") {
             warn(c.name + "() ignored (would generate files on disk)");
+        } else if (n == "configure_file") {
+            configureFile(A);
         } else if (n == "include") {
             if (A.empty()) return;
             fs::path p = absPath(A[0]);

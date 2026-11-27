@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.10)
+project(cfgdemo C)
+set(APP_VERSION "1.2.3")
+set(HAVE_FOO ON)
+set(HAVE_BAR OFF)
+configure_file(config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h @ONLY)
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
+add_executable(cfgdemo main.c)

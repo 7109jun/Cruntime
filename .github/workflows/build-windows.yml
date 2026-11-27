@@ -92,7 +92,7 @@ jobs:
         continue-on-error: true
         run: |
           # CRuntime.exe is a GUI-subsystem exe: Start-Process -PassThru + WaitForExit is required to wait for it.
-          $tests = @('examples\hello.cpp','examples\cproj','examples\exceptions.cpp') + (Get-ChildItem tests\jit\*.cpp | ForEach-Object { "tests\jit\$($_.Name)" })
+          $tests = @('examples\hello.cpp','examples\cproj','examples\cfg','examples\exceptions.cpp') + (Get-ChildItem tests\jit\*.cpp | ForEach-Object { "tests\jit\$($_.Name)" })
           $i = 0
           foreach ($t in $tests) {
             $i++

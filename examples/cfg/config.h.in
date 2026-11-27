@@ -1,0 +1,4 @@
+#define APP_VERSION "@APP_VERSION@"
+#cmakedefine HAVE_FOO
+#cmakedefine HAVE_BAR
+#cmakedefine01 HAVE_FOO

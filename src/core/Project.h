@@ -21,6 +21,8 @@ struct ProjectSpec {
     std::string cStd;                        // e.g. "c17" (empty = default)
     std::string cxxStd;                      // e.g. "c++20" (empty = default)
     std::vector<std::string> warnings;
+    // Files generated in memory by the CMake interpreter (configure_file, file(WRITE)): path -> content.
+    std::vector<std::pair<fs::path, std::string>> virtualFiles;
 };
 
 // Merge b into a (used when several files are dropped at once).
@@ -44,6 +46,7 @@ inline void mergeSpec(ProjectSpec& a, const ProjectSpec& b) {
     if (a.cStd.empty()) a.cStd = b.cStd;
     if (a.cxxStd.empty()) a.cxxStd = b.cxxStd;
     for (const auto& w : b.warnings) a.warnings.push_back(w);
+    for (const auto& v : b.virtualFiles) a.virtualFiles.push_back(v);
 }
 
 }  // namespace cr

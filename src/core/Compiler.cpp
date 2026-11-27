@@ -4,6 +4,8 @@
 #include <clang/Basic/DiagnosticOptions.h>
 #include <clang/CodeGen/CodeGenAction.h>
 #include <clang/Frontend/CompilerInstance.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/VirtualFileSystem.h>
 #include <clang/Frontend/CompilerInvocation.h>
 #include <clang/Frontend/TextDiagnosticPrinter.h>
 #include <llvm/IR/LLVMContext.h>
@@ -86,6 +88,15 @@ bool compileSource(const SourceFile& src, const ProjectSpec& spec, const Toolcha
     clang::CompilerInstance ci;
     ci.setInvocation(inv);
     ci.createDiagnostics(&printer, /*ShouldOwnClient=*/false);
+    if (!spec.virtualFiles.empty()) {
+        // Generated files (configure_file ...) exist only in memory: overlay them on the real file system.
+        llvm::IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> ov(new llvm::vfs::OverlayFileSystem(llvm::vfs::getRealFileSystem()));
+        llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> mem(new llvm::vfs::InMemoryFileSystem());
+        for (const auto& v : spec.virtualFiles) mem->addFile(u8(v.first), 0, llvm::MemoryBuffer::getMemBufferCopy(v.second));
+        ov->pushOverlay(mem);
+        ci.createFileManager(ov);
+        ci.createSourceManager(ci.getFileManager());
+    }
 
     auto ctx = std::make_unique<llvm::LLVMContext>();
     clang::EmitLLVMOnlyAction action(ctx.get());
